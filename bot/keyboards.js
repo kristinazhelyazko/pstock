@@ -197,14 +197,7 @@ function getRecountDatesForAddressKeyboard(dates, addressId) {
 }
 
 function getMenuReplyKeyboard() {
-  return {
-    reply_markup: {
-      keyboard: [[{ text: 'Меню' }]],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-      is_persistent: true,
-    },
-  };
+  return {};
 }
 
 function getFulfillmentKeyboard() {

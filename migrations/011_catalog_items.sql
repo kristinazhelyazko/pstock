@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS catalog_item (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    price INTEGER NOT NULL,
+    image_path TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+

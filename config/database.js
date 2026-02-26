@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const dotenv = require('dotenv');
+const envResult = dotenv.config();
 
 function resolveSslOption() {
   const val = (process.env.DATABASE_SSL || '').toLowerCase().trim();
@@ -8,8 +9,11 @@ function resolveSslOption() {
   return process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false;
 }
 
+const connectionString =
+  (envResult.parsed && envResult.parsed.DATABASE_URL) || process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   ssl: resolveSslOption(),
 });
 

@@ -28,7 +28,7 @@ async function getPendingReminders() {
      JOIN orders o ON o.id = r.order_id
      JOIN address a ON a.id = o.address_id
      WHERE r.sent = FALSE 
-       AND o.status IN ('active','assembled')
+       AND o.status IN ('active','assembled','processing','accepted')
        AND r.scheduled_date = CURRENT_DATE`
   );
   return res.rows;
@@ -136,9 +136,10 @@ function formatAdminReminderMessage(orderId, executionDate, daysLeft, addressNam
 
 function formatReminderErrorMessage(orderId, triggerType, addressName, error) {
   const errMsg = String((error && error.message) || error || '').slice(0, 500);
+  const num = Number(orderId || 0) || orderId;
   return [
     '❌ Ошибка отправки напоминания',
-    `Заказ №${orderId}`,
+    `Заказ №${num}`,
     `Триггер: ${triggerType}`,
     `Адрес: ${addressName || ''}`,
     `Ошибка: ${errMsg}`,
@@ -163,7 +164,7 @@ async function processDueReminders() {
           if (!order) {
             continue;
           }
-          if (!['active','assembled'].includes(String(order.status || ''))) {
+          if (!['active','assembled','processing','accepted'].includes(String(order.status || ''))) {
             await markSent(r.id);
             continue;
           }
@@ -243,7 +244,7 @@ async function sendDueRemindersForOrder(orderId) {
        WHERE r.sent = FALSE 
          AND r.order_id = $1 
          AND r.scheduled_date = CURRENT_DATE
-         AND o.status IN ('active','assembled')`,
+         AND o.status IN ('active','assembled','processing','accepted')`,
       [orderId]
     );
     for (const r of res.rows) {
@@ -259,7 +260,7 @@ async function sendDueRemindersForOrder(orderId) {
           if (!order) {
             continue;
           }
-          if (!['active','assembled'].includes(String(order.status || ''))) {
+          if (!['active','assembled','processing','accepted'].includes(String(order.status || ''))) {
             await markSent(r.id);
             continue;
           }

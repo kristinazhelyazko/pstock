@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const logger = require('./utils/logger');
 
 const app = express();
@@ -16,6 +17,16 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve static files
 app.use(express.static('public'));
+app.use('/elements', express.static('elements'));
+
+app.get('/home.png', (req, res, next) => {
+  const filePath = path.join(__dirname, 'home.png');
+  res.sendFile(filePath, (err) => {
+    if (err) {
+      next(err);
+    }
+  });
+});
 
 // Health check
 app.get('/health', (req, res) => {

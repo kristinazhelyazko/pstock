@@ -5,10 +5,15 @@
   "main": "bot/index.js",
   "scripts": {
     "start": "node bot/index.js",
+    "start:client-bot": "node client-bot/index.js",
     "start:server": "node server.js",
     "dev": "nodemon bot/index.js",
+    "dev:client-bot": "nodemon client-bot/index.js",
     "dev:server": "nodemon server.js",
     "migrate": "node migrations/run.js",
+    "db:ensure-address": "node scripts/ensureAddressTable.js",
+    "seed:catalog": "node scripts/seedCatalogFromElements.js",
+    "export:data": "node scripts/exportData.js",
     "create-admin": "node scripts/createAdmin.js",
     "test:bot": "node scripts/testBot.js",
     "test:db": "node scripts/testDb.js"

@@ -1,6 +1,59 @@
 const pool = require('../config/database');
 const logger = require('../utils/logger');
 
+async function reserveOrderNumber(client, source) {
+  const maxAttempts = 50;
+  for (let i = 0; i < maxAttempts; i++) {
+    const res = await client.query(
+      `SELECT n
+       FROM generate_series(1000, 9999) AS g(n)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM order_number_registry r WHERE r.number = g.n
+       )
+       ORDER BY n
+       LIMIT 1`
+    );
+    const row = res.rows[0];
+    if (!row || typeof row.n !== 'number') {
+      break;
+    }
+    const candidate = row.n;
+    await client.query('SAVEPOINT order_number_sp');
+    try {
+      await client.query(
+        'INSERT INTO order_number_registry(number, created_at, source) VALUES ($1, NOW(), $2)',
+        [candidate, source || null]
+      );
+      await client.query('RELEASE SAVEPOINT order_number_sp');
+      return candidate;
+    } catch (e) {
+      await client.query('ROLLBACK TO SAVEPOINT order_number_sp');
+      if (e && e.code === '23505') {
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error('Unable to generate unique order number');
+}
+
+async function generateOrderNumber() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const num = await reserveOrderNumber(client, 'external');
+    await client.query('COMMIT');
+    return num;
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function findAddressIdByName(name) {
   const res = await pool.query('SELECT id FROM address WHERE name = $1', [name]);
   return res.rows[0] ? res.rows[0].id : null;
@@ -57,9 +110,32 @@ async function createOrder(userId, order) {
         orderTypeId = t2.rows[0] ? t2.rows[0].id : null;
       }
     }
+    const status = order.status || 'active';
+    let orderNumber = order.number;
+    if (typeof orderNumber !== 'number' || !Number.isFinite(orderNumber)) {
+      orderNumber = await reserveOrderNumber(client, 'order');
+    }
+    const executionTimeTo = order.execution_time_to || order.execution_time || '00:00';
     const insOrder = await client.query(
-      'INSERT INTO orders (created_by_user_id, fulfillment_type, address_id, execution_date, execution_time, order_type_id, status, creator_full_name, payment_status_id, total_cost, paid_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
-      [userId, order.fulfillment_type, addressId, order.execution_date, order.execution_time, orderTypeId, 'active', order.creator_full_name || null, order.payment_status_id || null, order.total_cost || 0, order.paid_amount || 0]
+      'INSERT INTO orders (created_by_user_id, fulfillment_type, address_id, execution_date, execution_time, execution_time_to, order_type_id, status, number, creator_full_name, payment_status_id, cost, total_cost, delivery_cost, total_delivery_cost, paid_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id',
+      [
+        userId,
+        order.fulfillment_type,
+        addressId,
+        order.execution_date,
+        order.execution_time,
+        executionTimeTo,
+        orderTypeId,
+        status,
+        orderNumber,
+        order.creator_full_name || null,
+        order.payment_status_id || null,
+        order.cost || order.total_cost || 0,
+        order.total_cost || order.cost || 0,
+        order.delivery_cost || 0,
+        order.total_delivery_cost || order.delivery_cost || 0,
+        order.paid_amount || 0,
+      ]
     );
     const orderId = insOrder.rows[0].id;
     const details = order.details || {};
@@ -133,6 +209,9 @@ async function createOrder(userId, order) {
     };
     await upsertDate('execution_date', order.execution_date);
     await upsertTime('execution_time', order.execution_time);
+    if (order.execution_time_to) {
+      await upsertTime('execution_time_to', order.execution_time_to);
+    }
     await upsertText('fulfillment_type', order.fulfillment_type || '');
     await upsertText('store_name', order.store_name || '');
     await upsertText('order_type', order.order_type || '');
@@ -195,9 +274,29 @@ async function createOrderDraft(userId, order) {
         orderTypeId = t2.rows[0] ? t2.rows[0].id : null;
       }
     }
+    const status = 'draft';
+    let orderNumber = order.number;
+    if (typeof orderNumber !== 'number' || !Number.isFinite(orderNumber)) {
+      orderNumber = await reserveOrderNumber(client, 'draft');
+    }
+    const executionTimeTo = order.execution_time_to || order.execution_time || '00:00';
     const insOrder = await client.query(
-      'INSERT INTO orders (created_by_user_id, fulfillment_type, address_id, execution_date, execution_time, order_type_id, status, creator_full_name, payment_status_id, total_cost, paid_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
-      [userId, order.fulfillment_type, addressId, order.execution_date, order.execution_time, orderTypeId, 'draft', order.creator_full_name || null, order.payment_status_id || null, order.total_cost || 0, order.paid_amount || 0]
+      'INSERT INTO orders (created_by_user_id, fulfillment_type, address_id, execution_date, execution_time, execution_time_to, order_type_id, status, number, creator_full_name, payment_status_id, total_cost, paid_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id',
+      [
+        userId,
+        order.fulfillment_type,
+        addressId,
+        order.execution_date,
+        order.execution_time,
+        executionTimeTo,
+        orderTypeId,
+        status,
+        orderNumber,
+        order.creator_full_name || null,
+        order.payment_status_id || null,
+        order.total_cost || 0,
+        order.paid_amount || 0,
+      ]
     );
     const orderId = insOrder.rows[0].id;
     const details = order.details || {};
@@ -268,6 +367,9 @@ async function createOrderDraft(userId, order) {
     };
     await upsertDate('execution_date', order.execution_date);
     await upsertTime('execution_time', order.execution_time);
+    if (order.execution_time_to) {
+      await upsertTime('execution_time_to', order.execution_time_to);
+    }
     await upsertText('fulfillment_type', order.fulfillment_type || '');
     await upsertText('store_name', order.store_name || '');
     await upsertText('order_type', order.order_type || '');
@@ -330,9 +432,27 @@ async function updateOrderAndActivate(orderId, order) {
         orderTypeId = t2.rows[0] ? t2.rows[0].id : null;
       }
     }
+    const status = order.status || 'active';
+    const executionTimeTo = order.execution_time_to || order.execution_time || '00:00';
     await client.query(
-      'UPDATE orders SET fulfillment_type=$1, address_id=$2, execution_date=$3, execution_time=$4, order_type_id=$5, status=$6, creator_full_name=$7, payment_status_id=$8, total_cost=$9, paid_amount=$10, updated_at=NOW() WHERE id=$11',
-      [order.fulfillment_type, addressId, order.execution_date, order.execution_time, orderTypeId, 'active', order.creator_full_name || null, order.payment_status_id || null, order.total_cost || 0, order.paid_amount || 0, orderId]
+      'UPDATE orders SET fulfillment_type=$1, address_id=$2, execution_date=$3, execution_time=$4, execution_time_to=$5, order_type_id=$6, status=$7, creator_full_name=$8, payment_status_id=$9, cost=$10, total_cost=$11, delivery_cost=$12, total_delivery_cost=$13, paid_amount=$14, updated_at=NOW() WHERE id=$15',
+      [
+        order.fulfillment_type,
+        addressId,
+        order.execution_date,
+        order.execution_time,
+        executionTimeTo,
+        orderTypeId,
+        status,
+        order.creator_full_name || null,
+        order.payment_status_id || null,
+        order.cost || order.total_cost || 0,
+        order.total_cost || order.cost || 0,
+        order.delivery_cost || 0,
+        order.total_delivery_cost || order.delivery_cost || 0,
+        order.paid_amount || 0,
+        orderId,
+      ]
     );
     const details = order.details || {};
     await client.query(
@@ -447,7 +567,7 @@ async function listActiveOrders(limit = 10) {
   const res = await pool.query(
     `SELECT o.id, o.execution_date, o.execution_time, a.name AS address_name
      FROM orders o JOIN address a ON a.id = o.address_id
-     WHERE o.status IN ('active','assembled')
+     WHERE o.status IN ('active','assembled','processing','accepted')
      ORDER BY o.execution_date ASC, o.execution_time ASC
      LIMIT $1`,
     [limit]
@@ -457,9 +577,9 @@ async function listActiveOrders(limit = 10) {
 
 async function listActiveOrdersByAddress(addressId, limit = 10) {
   const res = await pool.query(
-    `SELECT o.id, o.execution_date, o.execution_time, a.name AS address_name
+    `SELECT o.id, o.number, o.execution_date, o.execution_time, a.name AS address_name
      FROM orders o JOIN address a ON a.id = o.address_id
-     WHERE o.status IN ('active','assembled') AND o.address_id = $1
+     WHERE o.status IN ('active','assembled','processing','accepted') AND o.address_id = $1
      ORDER BY o.execution_date ASC, o.execution_time ASC
      LIMIT $2`,
     [addressId, limit]
@@ -467,12 +587,52 @@ async function listActiveOrdersByAddress(addressId, limit = 10) {
   return res.rows;
 }
 
+async function listActiveOrdersByAddressPage(addressId, limit = 10, offset = 0) {
+  const res = await pool.query(
+    `SELECT MIN(o.id) AS id,
+            COALESCE(o.number, o.id) AS number,
+            MIN(o.execution_date) AS execution_date,
+            MIN(o.execution_time) AS execution_time,
+            a.name AS address_name,
+            COUNT(*) AS positions_count
+     FROM orders o
+     JOIN address a ON a.id = o.address_id
+     WHERE o.status IN ('active','assembled','processing','accepted') AND o.address_id = $1
+     GROUP BY COALESCE(o.number, o.id), a.name
+     ORDER BY MIN(o.execution_date) ASC, MIN(o.execution_time) ASC
+     LIMIT $2 OFFSET $3`,
+    [addressId, limit, offset]
+  );
+  return res.rows;
+}
+
+async function countActiveOrdersByAddress(addressId) {
+  const res = await pool.query(
+    `SELECT COUNT(*)::int AS cnt
+     FROM orders o
+     WHERE o.status IN ('active','assembled','processing','accepted') AND o.address_id = $1`,
+    [addressId]
+  );
+  return res.rows[0] ? res.rows[0].cnt : 0;
+}
+
+async function getAddressNameById(addressId) {
+  const res = await pool.query('SELECT name FROM address WHERE id = $1', [addressId]);
+  return res.rows[0] ? res.rows[0].name : null;
+}
+
+async function getCatalogImagePathById(catalogItemId) {
+  const id = parseInt(catalogItemId, 10);
+  if (!Number.isFinite(id)) return null;
+  const res = await pool.query('SELECT image_path FROM catalog_item WHERE id = $1', [id]);
+  return res.rows[0] ? res.rows[0].image_path : null;
+}
 async function getOrderWithDetails(orderId) {
   const otCheck = await pool.query(`SELECT to_regclass('ordertype') IS NOT NULL AS exists`);
   const hasOt = !!(otCheck.rows[0] && otCheck.rows[0].exists);
   if (hasOt) {
     const res = await pool.query(
-      `SELECT o.id, o.fulfillment_type, o.execution_date, o.execution_time, o.status,
+      `SELECT o.id, o.number, o.fulfillment_type, o.execution_date, o.execution_time, o.status,
               o.creator_full_name,
               o.total_cost,
               o.paid_amount,
@@ -493,13 +653,13 @@ async function getOrderWithDetails(orderId) {
        LEFT JOIN order_photos p ON p.order_id = o.id
        LEFT JOIN order_card_photo cp ON cp.order_id = o.id
        WHERE o.id = $1
-       GROUP BY o.id, a.name, ot.name, ot.called, d.details, c.client_name, c.client_phone, c.recipient_name, c.recipient_phone, c.recipient_address, cp.file_id, ps.name`,
+       GROUP BY o.id, o.number, a.name, ot.name, ot.called, d.details, c.client_name, c.client_phone, c.recipient_name, c.recipient_phone, c.recipient_address, cp.file_id, ps.name`,
       [orderId]
     );
     return res.rows[0] || null;
   } else {
     const res = await pool.query(
-      `SELECT o.id, o.fulfillment_type, o.execution_date, o.execution_time, o.status,
+      `SELECT o.id, o.number, o.fulfillment_type, o.execution_date, o.execution_time, o.status,
               o.creator_full_name,
               o.total_cost,
               o.paid_amount,
@@ -518,7 +678,7 @@ async function getOrderWithDetails(orderId) {
        LEFT JOIN order_photos p ON p.order_id = o.id
        LEFT JOIN order_card_photo cp ON cp.order_id = o.id
        WHERE o.id = $1
-       GROUP BY o.id, a.name, d.details, c.client_name, c.client_phone, c.recipient_name, c.recipient_phone, c.recipient_address, cp.file_id, ps.name`,
+       GROUP BY o.id, o.number, a.name, d.details, c.client_name, c.client_phone, c.recipient_name, c.recipient_phone, c.recipient_address, cp.file_id, ps.name`,
       [orderId]
     );
     const row = res.rows[0] || null;
@@ -543,6 +703,51 @@ async function cancelOrder(orderId) {
 
 async function assembleOrder(orderId) {
   await pool.query('UPDATE orders SET status = $1 WHERE id = $2', ['assembled', orderId]);
+}
+
+async function acceptOrder(orderId) {
+  await pool.query('UPDATE orders SET status = $1 WHERE id = $2', ['accepted', orderId]);
+}
+
+async function acceptOrdersByNumber(number) {
+  await pool.query('UPDATE orders SET status = $1 WHERE number = $2', ['accepted', number]);
+}
+
+async function updateOrderDeliveryCost(orderId, cost) {
+  await pool.query(
+    `UPDATE order_details
+     SET details = jsonb_set(COALESCE(details, '{}'::jsonb), '{delivery_cost}', to_jsonb($2::numeric), true)
+     WHERE order_id = $1`,
+    [orderId, cost]
+  );
+}
+
+async function getOrdersByNumber(number) {
+  const res = await pool.query(
+    `SELECT o.id,
+            o.number,
+            o.fulfillment_type,
+            o.execution_date,
+            o.execution_time,
+            o.status,
+            o.total_cost,
+            o.paid_amount,
+            a.name AS address_name,
+            d.details,
+            c.client_name,
+            c.client_phone,
+            c.recipient_name,
+            c.recipient_phone,
+            c.recipient_address
+     FROM orders o
+     JOIN address a ON a.id = o.address_id
+     LEFT JOIN order_details d ON d.order_id = o.id
+     LEFT JOIN contacts c ON c.order_id = o.id
+     WHERE o.number = $1
+     ORDER BY o.id`,
+    [number]
+  );
+  return res.rows;
 }
 
 async function deleteOrder(orderId) {
@@ -596,11 +801,17 @@ module.exports = {
   updateOrderAndActivate,
   listActiveOrders,
   listActiveOrdersByAddress,
+  listActiveOrdersByAddressPage,
+  countActiveOrdersByAddress,
   getOrderWithDetails,
   completeOrder,
   cancelOrder,
   assembleOrder,
+  acceptOrder,
+  acceptOrdersByNumber,
   findAddressIdByName,
+  getAddressNameById,
+  getCatalogImagePathById,
   deleteOrder,
   findPaymentStatusIdByName,
   findOrderTypeIdByName,
@@ -611,4 +822,7 @@ module.exports = {
   addOrderPhoto,
   deleteOrderPhotos,
   getOrderPhotosCount,
+  updateOrderDeliveryCost,
+  getOrdersByNumber,
+  generateOrderNumber,
 };

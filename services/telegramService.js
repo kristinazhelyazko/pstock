@@ -1,4 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+const path = require('path');
+const { Blob } = require('buffer');
 const logger = require('../utils/logger');
 
 let botInstance = null;
@@ -120,10 +123,24 @@ async function sendDocumentToChannel(channelId, document, options = {}) {
         const token = process.env.TELEGRAM_BOT_TOKEN;
         if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
         const url = `https://api.telegram.org/bot${token}/sendDocument`;
-        const fs = require('fs');
         const form = new FormData();
         form.append('chat_id', channelId);
-        form.append('document', typeof document === 'string' ? fs.createReadStream(document) : document);
+        let value = document;
+        let filename = null;
+        if (typeof document === 'string') {
+          const filePath = document;
+          const data = await fs.promises.readFile(filePath);
+          value = new Blob([data]);
+          filename = path.basename(filePath) || 'document';
+        } else if (Buffer.isBuffer(document)) {
+          value = new Blob([document]);
+          filename = (options && options.filename) || 'document';
+        }
+        if (filename) {
+          form.append('document', value, filename);
+        } else {
+          form.append('document', value);
+        }
         if (options && options.caption) form.append('caption', options.caption);
         const res = await fetch(url, { method: 'POST', body: form });
         if (!res.ok) {
@@ -161,16 +178,34 @@ async function sendPhotoToChannel(channelId, fileId, options = {}) {
   let targetId = channelId;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      if (bot) {
-        const msg = await bot.sendPhoto(targetId, fileId, options);
-        logger.info(`Photo sent to channel ${targetId}`);
-        return msg;
-      } else {
-        const token = process.env.TELEGRAM_BOT_TOKEN;
-        if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const raw = typeof fileId === 'string' ? fileId : '';
+      const isHttpUrl = typeof raw === 'string' && /^https?:\/\//i.test(raw);
+      const looksLikeLocalPath =
+        typeof raw === 'string' &&
+        !isHttpUrl &&
+        (raw.startsWith('/') ||
+          raw.startsWith('./') ||
+          raw.startsWith('../') ||
+          raw.includes('\\') ||
+          /^[A-Za-z]:[\\/]/.test(raw));
+      if (looksLikeLocalPath && token) {
         const url = `https://api.telegram.org/bot${token}/sendPhoto`;
-        const body = { chat_id: targetId, photo: fileId, ...options };
-        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        let filePath = raw;
+        if (!path.isAbsolute(filePath)) {
+          const rootDir = path.join(__dirname, '..');
+          filePath = path.join(rootDir, filePath.replace(/^\/+/, ''));
+        }
+        const form = new FormData();
+        form.append('chat_id', targetId);
+        const data = await fs.promises.readFile(filePath);
+        const ext = path.extname(filePath) || '.jpg';
+        const blob = new Blob([data]);
+        form.append('photo', blob, `photo${ext}`);
+        if (options && options.caption) {
+          form.append('caption', options.caption);
+        }
+        const res = await fetch(url, { method: 'POST', body: form });
         if (!res.ok) {
           const txt = await res.text();
           const err = new Error(`HTTP ${res.status} ${txt}`);
@@ -178,9 +213,31 @@ async function sendPhotoToChannel(channelId, fileId, options = {}) {
           throw err;
         }
         const json = await res.json();
-        logger.info(`Photo sent to channel ${targetId} via HTTP`);
+        logger.info(`Photo sent to channel ${targetId} via HTTP (file upload)`);
         return json.result;
       }
+      if (bot) {
+        const msg = await bot.sendPhoto(targetId, fileId, options);
+        logger.info(`Photo sent to channel ${targetId}`);
+        return msg;
+      }
+      if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
+      const url = `https://api.telegram.org/bot${token}/sendPhoto`;
+      const body = { chat_id: targetId, photo: fileId, ...options };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        const err = new Error(`HTTP ${res.status} ${txt}`);
+        err.response = { body: { parameters: {} } };
+        throw err;
+      }
+      const json = await res.json();
+      logger.info(`Photo sent to channel ${targetId} via HTTP`);
+      return json.result;
     } catch (error) {
       const retrySec = getRetryAfterSeconds(error);
       if (retrySec && attempt < maxRetries) {

@@ -4,6 +4,7 @@ logs
 *.log
 combined.log
 error.log
+.dockerignore
 .git
 .env
 frontend/node_modules

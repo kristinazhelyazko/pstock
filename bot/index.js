@@ -215,13 +215,14 @@ async function start() {
       const ctx = { chat: query.message.chat, from: query.from };
       const stAuth = getUserState(query.from.id);
       const expAt = (stAuth.data || {}).auth_expires_at;
-      if (((stAuth.state || '').startsWith('order_') || stAuth.state === 'authenticated') && expAt && Date.now() > expAt) {
+      const stState = String(stAuth.state || '');
+      if ((stState.startsWith('order_') || stState === 'authenticated') && expAt && Date.now() > expAt) {
         clearUserState(query.from.id);
         await bot.sendMessage(chatId, '❌ Вы не авторизованы. Введите /start.');
         return;
       }
       const { getInterruptOrderKeyboard } = require('./keyboards');
-      const isOrderFlow = ((stAuth.state || '').startsWith('order_'));
+      const isOrderFlow = stState.startsWith('order_') && !stState.startsWith('order_manage');
       const isOrderCallback = String(data || '').startsWith('order_') || String(data || '').startsWith('payment_') || String(data || '').startsWith('delivery_paid_') || String(data || '').startsWith('interrupt_order_') || data === 'cancel' || data === 'noop';
       if (isOrderFlow && !isOrderCallback) {
         await bot.sendMessage(chatId, 'Переход доступен после окончания оформления заказа. Хотите прекратить создание заказа?', getInterruptOrderKeyboard());

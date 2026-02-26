@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PERIOD - Заказ цветов</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div id="app">
+        <div id="store-notification" class="notification">
+            Ваша корзина еще пуста. Добавьте позиции.
+        </div>
+
+        <div id="store-main-screen" class="screen active">
+            <div class="logo-container">
+                <img src="period.png" alt="P Logo" class="logo-icon">
+                <img src="full_logo.png" alt="PERIOD" class="logo-text" style="margin-bottom: 15px;">
+            </div>
+            <p class="center-title" style="margin-bottom: 20px; font-size: 22px; line-height: 1.35;">
+                Для того, чтобы создать заказ, выберите населенный пункт:
+            </p>
+            <div id="store-address-buttons" class="button-group">
+            </div>
+        </div>
+
+        <div id="catalog-screen" class="screen">
+            <div class="catalog-top-row">
+                <button class="btn btn-back catalog-back-button" onclick="goBackToStoreMain()">
+                    <img src="back.png" alt="Назад" class="catalog-back-icon">
+                </button>
+                <img src="logo.png" alt="PERIOD" class="catalog-logo">
+                <button class="cart-button" onclick="openCart()">
+                    <img src="pocket.png" alt="Корзина" style="width: 20px; height: 20px;">
+                </button>
+            </div>
+            <div class="catalog-divider"></div>
+            <div class="catalog-title-row">
+                <h2 id="catalog-title" class="catalog-title">Каталог</h2>
+                <div class="catalog-address-chip" id="catalog-address-label"></div>
+            </div>
+            <div id="catalog-list" class="catalog-list">
+            </div>
+        </div>
+
+        <div id="cart-screen" class="screen">
+            <div class="catalog-top-row">
+                <button class="btn btn-back catalog-back-button" onclick="goBackToCatalog()">
+                    <img src="back.png" alt="Назад" class="catalog-back-icon">
+                </button>
+                <img src="logo.png" alt="PERIOD" class="catalog-logo">
+                <div></div>
+            </div>
+            <div class="catalog-divider"></div>
+            <div class="cart-title-row">
+                <h2 class="cart-title">Корзина</h2>
+            </div>
+            <div id="cart-list" class="cart-list"></div>
+            <div class="cart-summary">
+                <span class="cart-summary-label">Итого:</span>
+                <span class="cart-summary-value" id="cart-total-value">0 ₽</span>
+            </div>
+            <button class="btn btn-primary cart-submit-btn" onclick="goToCheckout()">
+                Оформить заказ
+            </button>
+        </div>
+
+        <div id="checkout-screen" class="screen">
+            <div class="catalog-top-row">
+                <button class="btn btn-back catalog-back-button" onclick="goBackToCart()">
+                    <img src="back.png" alt="Назад" class="catalog-back-icon">
+                </button>
+                <img src="logo.png" alt="PERIOD" class="catalog-logo">
+                <div></div>
+            </div>
+            <div class="catalog-divider"></div>
+            <div class="checkout-title-row">
+                <h2 class="checkout-title">Оформление заказа</h2>
+            </div>
+            <div class="checkout-form">
+                <input id="checkout-client-name" class="checkout-input" type="text" placeholder="Введите свое ФИО *">
+                <input id="checkout-client-telegram" class="checkout-input" type="text" placeholder="Введите ваш ник в Telegram">
+                <input id="checkout-client-phone" class="checkout-input phone-input" type="tel" placeholder="Введите ваш номер телефона *">
+                <div class="checkout-divider"></div>
+                <div id="checkout-items"></div>
+                <label class="checkout-checkbox consent-checkbox">
+                    <input type="checkbox" id="consent-checkbox">
+                    <span>
+                        Даю <span class="consent-link" onclick="openConsentScreen()">согласие на обработку персональных данных</span><span class="required-star">*</span>
+                    </span>
+                </label>
+                <button class="btn btn-primary checkout-submit-btn" type="button" onclick="submitCheckout()">
+                    Отправить заказ
+                </button>
+            </div>
+        </div>
+
+        <div id="consent-screen" class="screen">
+            <div class="catalog-top-row">
+                <button class="btn btn-back catalog-back-button" onclick="goBackFromConsent()">
+                    <img src="back.png" alt="Назад" class="catalog-back-icon">
+                </button>
+                <img src="logo.png" alt="PERIOD" class="catalog-logo">
+                <div></div>
+            </div>
+            <div class="catalog-divider"></div>
+            <div class="consent-content" id="consent-content"></div>
+        </div>
+
+        <div id="checkout-success-screen" class="screen">
+            <div class="catalog-top-row">
+                <button class="btn btn-back catalog-back-button" onclick="goBackToStoreMain()">
+                    <img src="home.png" alt="Главное меню" class="catalog-back-icon">
+                </button>
+                <img src="logo.png" alt="PERIOD" class="catalog-logo">
+                <div></div>
+            </div>
+            <div class="catalog-divider"></div>
+            <div class="checkout-success">
+                <p class="checkout-success-main">Ваш заказ № отправлен!</p>
+                <p class="checkout-success-sub">Наш менеджер свяжется в ближайшее время для уточнения заказа.</p>
+            </div>
+        </div>
+
+        <div id="order-confirm-overlay" class="modal-overlay" style="display: none;">
+            <div class="modal-box">
+                <div class="modal-message">Проверьте корректность введенных данных:</div>
+                <div id="order-confirm-content" class="order-confirm-content"></div>
+                <div class="modal-actions">
+                    <button class="btn" type="button" onclick="editCheckout()">Внести изменение</button>
+                    <button class="btn btn-primary" type="button" onclick="confirmCheckout()">Всё верно</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="store-loading-overlay" class="modal-overlay" style="display: none;">
+            <div class="modal-box">
+                <div class="store-spinner"></div>
+                <div class="modal-message">Отправляем заказ, пожалуйста подождите...</div>
+            </div>
+        </div>
+
+
+        <script src="js/api.js"></script>
+        <script src="js/store.js"></script>
+    </div>
+</body>
+</html>
